@@ -22,6 +22,18 @@ const sensorKeys = {
   uptime: "vm_uptime",
   status: "vm_status",
 } as const;
+const containerKeys = {
+  cpu: "container_cpu",
+  memory: "container_memory",
+  memoryTotal: "container_max_memory",
+  memoryPercentage: "container_memory_percentage",
+  disk: "container_disk",
+  diskTotal: "container_max_disk",
+  networkRx: "container_netin",
+  networkTx: "container_netout",
+  uptime: "container_uptime",
+  status: "container_status",
+} as const;
 const buttonKeys: Record<LifecycleActionId, string> = {
   start: "start",
   shutdown: "shutdown",
@@ -41,15 +53,17 @@ export interface VmBinding {
 }
 function vmIdentifier(device: DeviceEntry): string {
   const ids = device.identifiers.filter(
-    ([domain, id]) => domain === "proxmoxve" && /^.+_vm_\d+$/.test(id),
+    ([domain, id]) =>
+      domain === "proxmoxve" && /^.+_(vm|container)_\d+$/.test(id),
   );
-  if (device.model === "LXC" || device.model === "Container")
+  if (
+    (device.model !== "VM" &&
+      device.model !== "LXC" &&
+      device.model !== "Container") ||
+    ids.length !== 1
+  )
     throw new Error(
-      "This device is a Proxmox container; the VM card supports VMs only.",
-    );
-  if (device.model !== "VM" || ids.length !== 1)
-    throw new Error(
-      "Select a VM device from the official Proxmox VE integration.",
+      "Select a VM or container device from the official Proxmox VE integration.",
     );
   return ids[0]![1];
 }
@@ -64,8 +78,10 @@ export function discoverVm(
       "Configured VM device was not found in the Home Assistant device registry.",
     );
   const identifier = vmIdentifier(device);
-  const match = /^(.+)_vm_(\d+)$/.exec(identifier)!;
-  const prefix = `${match[1]}_${match[2]}_`;
+  const match = /^(.+)_(vm|container)_(\d+)$/.exec(identifier)!;
+  const isContainer = match[2] === "container";
+  const prefix = `${match[1]}_${match[3]}_`;
+  const keys: Record<string, string> = isContainer ? containerKeys : sensorKeys;
   const parent = registry.devices.find((d) => d.id === device.via_device_id);
   const nodeIds =
     parent?.identifiers.filter(
@@ -104,7 +120,7 @@ export function discoverVm(
   };
   const sensors: VmBinding["sensors"] = {};
   for (const role of entityRoles) {
-    const entity = resolve(sensorKeys[role], "sensor", overrides[role]);
+    const entity = resolve(keys[role]!, "sensor", overrides[role]);
     if (entity) sensors[role] = entity;
   }
   const actions: VmBinding["actions"] = {};
@@ -116,7 +132,7 @@ export function discoverVm(
     identity: {
       deviceId,
       name: device.name_by_user || device.name || `VM ${match[2]}`,
-      vmId: Number(match[2]),
+      vmId: Number(match[3]),
       node: nodeIds[0]![1].slice(`${match[1]}_node_node/`.length),
     },
     sensors,
